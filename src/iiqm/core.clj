@@ -4,12 +4,20 @@
   (:gen-class))
 
 (require 'spyscope.core)
+(require '[clojure.test.check :as tc])
+(require '[clojure.test.check.generators :as gen])
+(require '[clojure.test.check.properties :as prop])
 
-;; a prefix-sum set is a counted-sorted set that also carries the prefix sum (in each node)
 
-;; Here is the meter. Notice that it is a simple extension of the built-in Len-Right-Meter
-;; built in to CountedSortedSet/counted-sorted-set:
+;; The commented form below was a first try at IIQM. I made the mistake of basing my collection
+;; on a set. Of course that was wrong because it didn't capture duplicate elements which are
+;; in general, significant.
+
 (comment
+  ;; A prefix-sum set is a counted-sorted set that also carries the prefix sum (in each node).
+
+  ;; Here is the meter. Notice that it is a simple extension of the built-in Len-Right-Meter
+  ;; built in to CountedSortedSet/counted-sorted-set:
   (defrecord Len-Right-Prefix-Sum-Meter [^int len right ^int prefix-sum])
 
   (defn combine-keyed [a b key-fun] (+ (key-fun ^Len-Right-Prefix-Sum-Meter a)
@@ -37,71 +45,71 @@
     (let [[left _ _] (ft-split-at prefix-sum-set (inc n))] (:prefix-sum (measured left))))
 
   (defn iiqm [prefix-sum-set]
-    (let [n (count prefix-sum-set)
-          w (weight n)
-          q (quot n 4)
-          denominator (/ n 2)
-          b (- n 1 q)]
+    (let [n (count prefix-sum-set)                          ;; total sample size
+          w (weight n)                                      ;; weight for edge samples
+          q2 (quot n 4)                                     ;; index of second quartile
+          q3 (- n 1 q2)                                     ;; index of third quartile
+          denominator (/ n 2)]                              ;; samples in IQR
       (if (< n 4)
         (throw (Exception. "IIQM requires at least 4 data points."))
-        (/ (+ (* w (+ (nth prefix-sum-set q) (nth prefix-sum-set b)))
+        (/ (+ (* w (+ (nth prefix-sum-set q2) (nth prefix-sum-set q3)))
               (if (< n 5)
                 0
-                (- (prefix-sum-at prefix-sum-set (dec b)) (prefix-sum-at prefix-sum-set q))))
+                (- (prefix-sum-at prefix-sum-set (dec q3)) (prefix-sum-at prefix-sum-set q2))))
            denominator)))))
 
-;; WOOPS! this shouldn't be a set at all! What I really want is a counted-double-list with another meter
-;; composed onto it: the sum (not the number of nodes, the sum of the node values).
-;; double-list is a sequential collection that provides constant-time access to both the left and right ends.
-;; I need constant-time access to the right end to add new elements.
 ;; counted-double-list provides all the features of double-list plus constant-time count and log-n nth.
-;; I need log-n access to nth in order to split the tree efficiently at the n-th element
-;; And additionally I need the sum of all the nodes in the tree.
+;; If that tree were sorted, and I could gain log-n access to the nth position (thanks counted-double-list!)
+;; then I could split the (sorted) tree efficiently at the n-th element.
+;; Once I'd split the tree (at a quartile) I'd need the sum of all the node values in that tree.
+;; What's really needed is a counted-double-list with another couple meters composed onto it:
+;;   the right-most value for sorting (a la counted-sorted-set)
+;;   the sum (not the number of nodes, the sum of the node values)
+;; let's start with some simple experiments...
 
-;; let's start simple, with a finger tree that will sum its nodes...
+;; A sequence consisting of random integers between 0 and 100. Its IIQM should tend toward 50.
+(def rando (repeatedly #(rand-int 101)))
 
-(def rando (repeatedly #(rand-int 100)))
-
-(def sum-tree (finger-tree (meter identity 0 +)))
-(def st (apply conj sum-tree (take 5 rando)))
-(measured st)
-
-;; and is it easy to re-implement counted-double-list?
+;; it is easy to re-implement the core of counted-double-list
 (def count-tree (finger-tree (meter (constantly 1) 0 +)))
-(def cdl (apply conj count-tree (take 5 rando)))
-(measured cdl)
 
-;; so how about a counted sum tree?
+;; and here's a finger tree that will sum its nodes...
+(def sum-tree (finger-tree (meter identity 0 +)))
+
+;; and here's a finger tree that knows its right-most value
+;; (to be used in efficient sorted insertion and retrieval later on)
+;; order is important on the or here (and btw since or is a macro we have to swaddle it in a function)
+(def right-tree (finger-tree (meter identity nil #(or %2 %1))))
+
+;; so how about both things in the same tree: a counted sum tree?
 (defrecord Pair [^int count sum])
 (let [measure         #(Pair. 1 %)
-      measure-of-empty (Pair. 0 0)
+      measure-of-empty (Pair. 0 0)                          ;; a.k.a. identity
       combine         #(Pair. (+ (:count %1) (:count %2)) (+ (:sum %1) (:sum %2)))]
   (def count-sum-tree
     (finger-tree
       (meter measure measure-of-empty combine))))
-(def tt (apply conj count-sum-tree (take 5 rando)))
-(measured tt)
 
-;; so how about a counted sum right tree?
-;; The count is an int. Sum and right are Objects.
+;; If we want to sort, we need the right-most value in the tree. How about a tree that does all three things?
+;; The count is an int. Sum and right are Objects so they can accept whatever kind of math-doing object you like.
 (defrecord Measure [^int count sum right])
 (let [measure         #(Measure. 1 % %)
-      measure-of-empty (Measure. 0 0 nil)
+      measure-of-empty (Measure. 0 0 nil)                   ;; a.k.a. identity
       combine         #(Measure. (+ (:count %1) (:count %2)) (+ (:sum %1) (:sum %2)) (or (:right %2) (:right %1)))]
   (def csr-tree
     (finger-tree
       (meter measure measure-of-empty combine))))
-(def csr (apply conj csr-tree (take 5 rando)))
-(measured csr)
 
-;; Now can we leverage the :right value here to perform ordered insertion?
-;; Clojure's SortedSet lets you conj into it so that'd be natural here.
-;; To start with, we'll just define a new function. We'll worry about protocols later.
+
 (defn conj-ordered
+  "conj values into the tree. The values are positioned according to the :right value of the tree's measure.
+  This will become the (IPersistentCollection) cons function on the new type. Yes you read that right! It turns
+  out that contrary to the central design idea of Clojure sequences, the cons function on that protocol does not
+  return a sequence at all. It returns a new collection!"
   ([tree]
    tree)
   ([tree value]
-    ;; EmptyTree doesn't define split()--see finger-tree.clj
+    ;; Booger: EmptyTree doesn't define split()--see finger-tree.clj
    (if (isa? (type tree) clojure.data.finger_tree.EmptyTree)
      (conj csr-tree value)
      (let [cmpr compare
@@ -114,58 +122,94 @@
      (recur (conj-ordered tree x) (first xs) (next xs))
      (conj-ordered tree x))))
 
-(def csro (apply conj-ordered csr-tree (take 5 rando)))
-(measured csro)
-
-(defn weight [n]
-  (- 1 (/ (mod n 4) 4)))
-
-;; Now I'd like to bring the iiqm function down and define it. It calls prefix-sum-at and nth.
-;; That means I'd have to make nth work. But it works through protocols and I haven't defined a type.
+;; Now I'd like to define the iiqm function. It calls prefix-sum-at and nth.
+;; That means we have to make nth work. But it works through protocols and we haven't defined a type.
 ;; And prefix-sum-at calls ft-split-at which calls split under the covers. Again, that one is part
-;; of a protocol that my tree type must define. It seems that trying to define a finger tree simply
+;; of a protocol that our tree type must define. It seems that trying to define a finger tree simply
 ;; by defining a meter is a losing battle. It seems we have to be all-in on defining a new type.
+;; But let's try to hack our way through it with plain old functions and see how far we can get...
 
-;; I'm going to try a little bit more anyway
 
-;; This would be the (Counted) count function on the new type
+;; First, we define the functions pertaining to the "counted" nature of our collection. Each of these depends
+;; on the tree's meter defining :count which is the number of elements in the tree.
+
 (defn count-count [c-tree]
+  "Return the number of items in the tree. The tree's meter must define :count which is the number of elements in the
+   tree. This will become the (Counted) count function on the new collection type"
   (:count (measured c-tree)))
 
-;; This would become the (IPersistentCollection) empty function on the new type
-(defn empty-count [c-tree]
-  csr-tree)                                                 ;; this is the ugliest of the hacks!
 
-;; Split any tree (with :count in its measure) at the nth position.
-;; This would be the (SplitAt) ft-split-at function on the new type.
-;; TODO: figure out if we can just call split-tree without all the range
-;; checking we're doing here.
+(defn empty-count [c-tree]
+  "Return the empty collection. This will become the (IPersistentCollection) empty function on the new type"
+  csr-tree)
+
 (defn ft-split-at-count [c-tree n]
+  "Split the tree at the nth position. The tree's meter must define :count which is the number of elements in the tree.
+  This will become the (SplitAt) ft-split-at function on the new type."
   (let [notfound nil]
     (cond
+      ;; Specifying three conditions instead of only two seems overly fussy. But I'm copying what finger-tree does.
       (< n 0) [(empty-count c-tree) notfound c-tree]
       (< n (count-count c-tree))
         (let [[pre m post] (split-tree c-tree #(> (:count %) n))]
           [pre m post])
       :else [c-tree notfound (empty-count c-tree)])))
 
-;; This would be the (Indexed) nth function on the new type.
 (defn nth-count [c-tree n]
+  "Return the nth element from the tree. The tree's meter must define :count which is the number of elements in the
+  tree.This will become the (Indexed) nth function on the new collection type."
   (second (ft-split-at-count c-tree n)))
 
+;; Second, we define the functions pertaining to the "summed" nature of our collection. Each of these depends on the
+;; tree's meter defining :sum which is the sum of the elements (values) in the tree.
+
 (defn prefix-sum-at [csr-tree n]
+  "Return the sum of the first n elements of the (sorted) tree. Tree must be sorted (somehow) and its meter must define
+  :sum which is the sum of the elements."
   (let [[left _ _] (ft-split-at-count csr-tree (inc n))] (:sum (measured left))))
 
+;; Third, and last, we define the IIQM (incremental interquartile mean) function.
+
+(defn weight [n]
+  (- 1 (/ (mod n 4) 4)))
+
 (defn iiqm [csr-tree]
-  (let [n (count-count csr-tree)
-        w (weight n)
-        q (quot n 4)
-        denominator (/ n 2)
-        b (- n 1 q)]
+  (let [n (count csr-tree)                                ;; total sample size
+        w (weight n)                                      ;; weight for edge samples
+        q2 (quot n 4)                                     ;; index of second quartile
+        q3 (- n 1 q2)                                     ;; index of third quartile
+        denominator (/ n 2)]                              ;; samples in IQR
     (if (< n 4)
       (throw (Exception. "IIQM requires at least 4 data points."))
-      (/ (+ (* w (+ (nth-count csr-tree q) (nth-count csr-tree b)))
+      (/ (+ (* w (+ (nth-count csr-tree q2) (nth-count csr-tree q3)))
             (if (< n 5)
               0
-              (- (prefix-sum-at csr-tree (dec b)) (prefix-sum-at csr-tree q))))
+              (- (prefix-sum-at csr-tree (dec q3)) (prefix-sum-at csr-tree q2))))
          denominator))))
+
+;; OK let's exercise some of our definitions...
+
+(def s (take 10 rando))
+(def ct (apply conj count-tree s))
+(measured ct)
+(def st (apply conj sum-tree s))
+(measured st)
+(def rt (apply conj right-tree s))
+(measured rt)
+(def cst (apply conj count-sum-tree s))
+(measured cst)
+(def csrt (apply conj csr-tree s))
+(measured csrt)
+
+(def csro (apply conj-ordered csr-tree s))
+(measured csro)
+
+(double (iiqm csro))
+
+
+
+(def sort-idempotent-prop
+  (prop/for-all [v (gen/vector gen/int)]
+                (= (sort v) (sort (sort v)))))
+
+(tc/quick-check 100 sort-idempotent-prop)
