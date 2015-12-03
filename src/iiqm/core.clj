@@ -174,7 +174,7 @@
   (- 1 (/ (mod n 4) 4)))
 
 (defn iiqm [csr-tree]
-  (let [n (count csr-tree)                                ;; total sample size
+  (let [n (count-count csr-tree)                          ;; total sample size
         w (weight n)                                      ;; weight for edge samples
         q2 (quot n 4)                                     ;; index of second quartile
         q3 (- n 1 q2)                                     ;; index of third quartile
@@ -206,6 +206,20 @@
 
 (double (iiqm csro))
 
+(let [powers #{10 100 1000 10000 100000 1000000}]
+  (loop [n 0 t csr-tree]
+    (if (> n 1000000)
+      (println "finished!")
+      (if (contains? powers n)
+        (do
+          (printf "a tree of size %d:\n" n)
+          (let [new-t (time (conj-ordered t (rand-int 101)))
+                iiqm (time (when (> n 3) (iiqm new-t)))]
+            (printf "IIQM is: %.2f\n" (double iiqm))
+            (recur (inc n) new-t)))
+        (let [new-t (conj-ordered t (rand-int 101))
+              iiqm (when (> n 3) (iiqm new-t))]
+          (recur (inc n) new-t))))))
 
 
 (def sort-idempotent-prop
