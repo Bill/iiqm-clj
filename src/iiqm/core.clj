@@ -220,10 +220,3 @@
         (let [new-t (conj-ordered t (rand-int 101))
               iiqm (when (> n 3) (iiqm new-t))]
           (recur (inc n) new-t))))))
-
-
-(def sort-idempotent-prop
-  (prop/for-all [v (gen/vector gen/int)]
-                (= (sort v) (sort (sort v)))))
-
-(tc/quick-check 100 sort-idempotent-prop)

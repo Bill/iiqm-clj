@@ -1,20 +1,20 @@
-# iiqm
+# iiqm-clj
 
-FIXME: description
+Incremental Interquartile Mean (IIQM) using Clojure Finger Trees.
+
+See Prezi presentation here: [IQM and Finger Trees](http://prezi.com/we05zikpc_bj/?utm_campaign=share&utm_medium=copy)
 
 ## Installation
 
-Download from http://example.com/FIXME.
+...
 
 ## Usage
 
-FIXME: explanation
-
-    $ java -jar iiqm-0.1.0-standalone.jar [args]
+...
 
 ## Options
 
-FIXME: listing of options this app accepts.
+...
 
 ## Examples
 
