@@ -9,4 +9,5 @@
                  [org.clojure/test.check "0.9.0"]]
   :main ^:skip-aot iiqm.core
   :target-path "target/%s"
+  :plugins [[lein-gorilla "0.3.5"]]
   :profiles {:uberjar {:aot :all}})

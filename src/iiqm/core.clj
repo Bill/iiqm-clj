@@ -95,7 +95,9 @@
 (defrecord Measure [^int count sum right])
 (let [measure         #(Measure. 1 % %)
       measure-of-empty (Measure. 0 0 nil)                   ;; a.k.a. identity
-      combine         #(Measure. (+ (:count %1) (:count %2)) (+ (:sum %1) (:sum %2)) (or (:right %2) (:right %1)))]
+      combine         #(Measure. (+ (:count %1) (:count %2))
+                                 (+ (:sum %1) (:sum %2))
+                                 (or (:right %2) (:right %1)))]
   (def csr-tree
     (finger-tree
       (meter measure measure-of-empty combine))))
@@ -206,17 +208,48 @@
 
 (double (iiqm csro))
 
-(let [powers #{10 100 1000 10000 100000 1000000}]
-  (loop [n 0 t csr-tree]
-    (if (> n 1000000)
-      (println "finished!")
-      (if (contains? powers n)
-        (do
-          (printf "a tree of size %d:\n" n)
-          (let [new-t (time (conj-ordered t (rand-int 101)))
-                iiqm (time (when (> n 3) (iiqm new-t)))]
-            (printf "IIQM is: %.2f\n" (double iiqm))
-            (recur (inc n) new-t)))
-        (let [new-t (conj-ordered t (rand-int 101))
-              iiqm (when (> n 3) (iiqm new-t))]
-          (recur (inc n) new-t))))))
+(comment (let [powers #{10 100 1000}]
+           (loop [n 0 t csr-tree]
+             (if (> n 1000)
+               (println "finished!")
+               (if (contains? powers n)
+                 (do
+                   (printf "a tree of size %d:\n" n)
+                   (let [new-t (time (conj-ordered t (rand-int 101)))
+                         iiqm (time (when (> n 3) (iiqm new-t)))]
+                     (printf "IIQM is: %.2f\n" (double iiqm))
+                     (recur (inc n) new-t)))
+                 (let [new-t (conj-ordered t (rand-int 101))
+                       iiqm (when (> n 3) (iiqm new-t))]
+                   (recur (inc n) new-t)))))))
+
+
+(defprotocol IIQM
+  "Incremental Interquartile Mean."
+  (conj [iiqm x])
+  (iqm [iiqm]))
+
+(defprotocol PrefixSum
+  (prefix-sum [coll n]))
+
+(extend-type clojure.lang.IPersistentVector
+  PrefixSum
+  (prefix-sum [coll n]
+    (reduce + 0 (take (inc n) coll)))
+  IIQM
+  (iqm [iiqm]
+    (let [n (count iiqm)                                    ;; total sample size
+          w (weight n)                                      ;; weight for edge samples
+          q2 (quot n 4)                                     ;; index of second quartile
+          q3 (- n 1 q2)                                     ;; index of third quartile
+          denominator (/ n 2)                               ;; samples in IQR
+          sorted (into [] (sort iiqm))]
+      (if (< n 4)
+        (throw (Exception. "IIQM requires at least 4 data points."))
+        (/ (+ (* w (+ (nth sorted q2) (nth sorted q3)))
+              (if (< n 5)
+                0
+                (- (prefix-sum sorted (dec q3)) (prefix-sum sorted q2))))
+           denominator)))))
+
+(iqm (into [] (take 10 rando)))
