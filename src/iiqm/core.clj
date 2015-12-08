@@ -193,20 +193,12 @@
 
 (def s (take 10 rando))
 (def ct (apply conj count-tree s))
-(measured ct)
 (def st (apply conj sum-tree s))
-(measured st)
 (def rt (apply conj right-tree s))
-(measured rt)
 (def cst (apply conj count-sum-tree s))
-(measured cst)
 (def csrt (apply conj csr-tree s))
-(measured csrt)
 
 (def csro (apply conj-ordered csr-tree s))
-(measured csro)
-
-(double (iiqm csro))
 
 (comment (let [powers #{10 100 1000}]
            (loop [n 0 t csr-tree]
@@ -224,9 +216,8 @@
                    (recur (inc n) new-t)))))))
 
 
-(defprotocol IIQM
-  "Incremental Interquartile Mean."
-  (conj [iiqm x])
+(defprotocol IQM
+  "Interquartile Mean."
   (iqm [iiqm]))
 
 (defprotocol PrefixSum
@@ -234,22 +225,115 @@
 
 (extend-type clojure.lang.IPersistentVector
   PrefixSum
-  (prefix-sum [coll n]
-    (reduce + 0 (take (inc n) coll)))
-  IIQM
-  (iqm [iiqm]
-    (let [n (count iiqm)                                    ;; total sample size
-          w (weight n)                                      ;; weight for edge samples
-          q2 (quot n 4)                                     ;; index of second quartile
-          q3 (- n 1 q2)                                     ;; index of third quartile
-          denominator (/ n 2)                               ;; samples in IQR
-          sorted (into [] (sort iiqm))]
-      (if (< n 4)
-        (throw (Exception. "IIQM requires at least 4 data points."))
-        (/ (+ (* w (+ (nth sorted q2) (nth sorted q3)))
-              (if (< n 5)
-                0
-                (- (prefix-sum sorted (dec q3)) (prefix-sum sorted q2))))
-           denominator)))))
+  (prefix-sum [vec n]
+    (reduce + 0 (take (inc n) vec))))
 
-(iqm (into [] (take 10 rando)))
+(defn iqm-sorted-vector-reduce [coll]
+     (let [n (count coll)                                    ;; total sample size
+           w (weight n)                                      ;; weight for edge samples
+           q2 (quot n 4)                                     ;; index of second quartile
+           q3 (- n 1 q2)                                     ;; index of third quartile
+           denominator (/ n 2)]                              ;; samples in range
+       (if (< n 4)
+         (throw (Exception. "IIQM requires at least 4 data points."))
+         (/ (+ (* w (+ (nth coll q2) (nth coll q3)))
+               (if (< n 5)
+                 0
+                 (- (prefix-sum coll (dec q3)) (prefix-sum coll q2))))
+            denominator))))
+
+;; IIQM1 behaves kind of like a collection in that conj returns a new instance of IIQM1
+(deftype IIQM1 [coll]
+  clojure.lang.IPersistentCollection
+  ;; this means conj--it's called by the conj function
+  (cons [iiqm1 x] (IIQM1. (into (empty coll) (sort (conj coll x)))))
+  IQM
+  (iqm [iiqm] (iqm-sorted-vector-reduce coll)))
+
+(defn iqm-sorted-vector-incremental [coll]
+  (let [n (count coll)                                    ;; total sample size
+        w (weight n)                                      ;; weight for edge samples
+        q2 (quot n 4)                                     ;; index of second quartile
+        q3 (- n 1 q2)                                     ;; index of third quartile
+        denominator (/ n 2)]                              ;; samples in range
+    (if (< n 4)
+      (throw (Exception. "IIQM requires at least 4 data points."))
+      (/ (+ (* w (+ (nth coll q2) (nth coll q3)))
+            (if (< n 5)
+              0
+              (- (prefix-sum coll (dec q3)) (prefix-sum coll q2))))
+         denominator))))
+
+(defn binary-search
+  "Given a sorted vector, returns the an index at which to insert x to maintain sort order.
+  NB: if x is not already in the collection, an index where x belongs is returned. If you need to
+  know if x is already present or not, then use nth to look it up."
+  ([sorted-vec value] (binary-search sorted-vec value 0 (dec (count sorted-vec))))
+  ([sorted-vec value low high]
+   (if (> low high)
+     low
+     (let [mid (+ low (quot (- high low) 2))
+           c   (compare (nth sorted-vec mid) value)]
+       (case c
+         -1 (recur sorted-vec value (inc mid) high)
+         0 mid
+         1 (recur sorted-vec value low (dec mid)))))))
+
+
+(defn insert [coll i x]
+  "Insert x in vector at index i and move the rest of the elements down to make room. Returned vector is 1
+  element larger."
+  (into (empty coll)
+        (concat
+          (take i coll) [x] (nthrest coll i))))
+
+(defn insert-sorted [coll x]
+  "Given a sorted collection coll and a new element x, return a new sorted collection with x in the right place.
+  NB: when it doesn't find x, it returns the index at which to insert x, so if you want to know if the value is
+  already in the collection, you'll have to look it up."
+  (let [i (binary-search coll x)]
+    (insert coll i x)))
+
+(deftype IIQM2 [coll]
+  clojure.lang.IPersistentCollection
+  (cons [iiqm1 x] (IIQM2. (insert-sorted coll x)))
+  IQM
+  (iqm [iiqm] (iqm-sorted-vector-incremental coll)))
+
+(defmacro time-nano
+  "Evaluates expr and returns an array. First is the value of the expr, second is the time it took in nanos."
+  [expr]
+  `(let [start# (. System (nanoTime))
+         result# ~expr]
+     [result# (- (. System (nanoTime)) start#)]))
+
+(defn run-iiqm [N algo-initial]
+  (time-nano
+    (loop [n 0 algo algo-initial]
+      (when (< n N)
+        (let
+          [new-algo (conj algo (rand-int 101))
+           iqm (when (> n 3) (iqm new-algo))]
+          (recur (inc n) new-algo))))))
+
+
+(defn benchmark [algo] (map (fn [%] [% (second (run-iiqm % algo))]) [10 100 1000]))
+(defn scale [m] (map (fn [[n nanos]][n  (quot nanos 1000000)]) m))
+
+
+(measured ct)
+(measured st)
+(measured rt)
+(measured cst)
+(measured csrt)
+(measured csro)
+
+(double (iiqm csro))
+
+(iqm (reduce conj (IIQM1. []) (filter odd? (range 1 18))))
+
+(iqm (reduce conj (IIQM1. []) (take 10 rando)))
+
+(benchmark (IIQM1. []))
+(benchmark (IIQM2. []))
+
