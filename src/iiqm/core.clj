@@ -175,7 +175,7 @@
 (defn weight [n]
   (- 1 (/ (mod n 4) 4)))
 
-(defn iiqm [csr-tree]
+(defn iqm-csr-tree [csr-tree]
   (let [n (count-count csr-tree)                          ;; total sample size
         w (weight n)                                      ;; weight for edge samples
         q2 (quot n 4)                                     ;; index of second quartile
@@ -208,11 +208,11 @@
                  (do
                    (printf "a tree of size %d:\n" n)
                    (let [new-t (time (conj-ordered t (rand-int 101)))
-                         iiqm (time (when (> n 3) (iiqm new-t)))]
+                         iiqm (time (when (> n 3) (iqm-csr-tree new-t)))]
                      (printf "IIQM is: %.2f\n" (double iiqm))
                      (recur (inc n) new-t)))
                  (let [new-t (conj-ordered t (rand-int 101))
-                       iiqm (when (> n 3) (iiqm new-t))]
+                       iiqm (when (> n 3) (iqm-csr-tree new-t))]
                    (recur (inc n) new-t)))))))
 
 
@@ -229,28 +229,6 @@
     (reduce + 0 (take (inc n) vec))))
 
 (defn iqm-sorted-vector-reduce [coll]
-     (let [n (count coll)                                    ;; total sample size
-           w (weight n)                                      ;; weight for edge samples
-           q2 (quot n 4)                                     ;; index of second quartile
-           q3 (- n 1 q2)                                     ;; index of third quartile
-           denominator (/ n 2)]                              ;; samples in range
-       (if (< n 4)
-         (throw (Exception. "IIQM requires at least 4 data points."))
-         (/ (+ (* w (+ (nth coll q2) (nth coll q3)))
-               (if (< n 5)
-                 0
-                 (- (prefix-sum coll (dec q3)) (prefix-sum coll q2))))
-            denominator))))
-
-;; IIQM1 behaves kind of like a collection in that conj returns a new instance of IIQM1
-(deftype IIQM1 [coll]
-  clojure.lang.IPersistentCollection
-  ;; this means conj--it's called by the conj function
-  (cons [iiqm1 x] (IIQM1. (into (empty coll) (sort (conj coll x)))))
-  IQM
-  (iqm [iiqm] (iqm-sorted-vector-reduce coll)))
-
-(defn iqm-sorted-vector-incremental [coll]
   (let [n (count coll)                                    ;; total sample size
         w (weight n)                                      ;; weight for edge samples
         q2 (quot n 4)                                     ;; index of second quartile
@@ -263,6 +241,15 @@
               0
               (- (prefix-sum coll (dec q3)) (prefix-sum coll q2))))
          denominator))))
+
+;; IIQM1 behaves kind of like a collection in that conj returns a new instance of IIQM1
+;; construct with an empty or sorted Vector
+(deftype IIQM1 [sorted-vector]
+  clojure.lang.IPersistentCollection
+  ;; this means conj--it's called by the conj function
+  (cons [iiqm x] (IIQM1. (into (empty sorted-vector) (sort (conj sorted-vector x)))))
+  IQM
+  (iqm [iiqm] (iqm-sorted-vector-reduce sorted-vector)))
 
 (defn binary-search
   "Given a sorted vector, returns the an index at which to insert x to maintain sort order.
@@ -283,9 +270,7 @@
 (defn insert [coll i x]
   "Insert x in vector at index i and move the rest of the elements down to make room. Returned vector is 1
   element larger."
-  (into (empty coll)
-        (concat
-          (take i coll) [x] (nthrest coll i))))
+  (into (conj (subvec coll 0 i) x) (nthrest coll i)))
 
 (defn insert-sorted [coll x]
   "Given a sorted collection coll and a new element x, return a new sorted collection with x in the right place.
@@ -294,11 +279,22 @@
   (let [i (binary-search coll x)]
     (insert coll i x)))
 
-(deftype IIQM2 [coll]
+;; construct with an empty or sorted Vector
+(deftype IIQM2 [sorted-vector]
   clojure.lang.IPersistentCollection
-  (cons [iiqm1 x] (IIQM2. (insert-sorted coll x)))
+  (cons [iiqm x] (IIQM2. (insert-sorted sorted-vector x)))
   IQM
-  (iqm [iiqm] (iqm-sorted-vector-incremental coll)))
+  (iqm [iiqm] (iqm-sorted-vector-reduce sorted-vector)))
+
+;; IIQM3 will be an incremental algorithm based on the sorted array (like IIQM1-2)
+;; but it will avoid calling the O(n) reduce in prefix sum.
+
+;; construct with a csr-tree
+(deftype IIQM4 [csr-tree]
+  clojure.lang.IPersistentCollection
+  (cons [iiqm x] (IIQM4. (conj-ordered csr-tree x)))
+  IQM
+  (iqm [iiqm] (iqm-csr-tree csr-tree)))
 
 (defmacro time-nano
   "Evaluates expr and returns an array. First is the value of the expr, second is the time it took in nanos."
@@ -328,7 +324,7 @@
 (measured csrt)
 (measured csro)
 
-(double (iiqm csro))
+(double (iqm-csr-tree csro))
 
 (iqm (reduce conj (IIQM1. []) (filter odd? (range 1 18))))
 

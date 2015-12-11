@@ -29,9 +29,9 @@
 
 (comment (testing "iiqm"
            (deftest four-test
-             (is (= (-> (+ 2 3) (/ 4/2)) (iiqm (prefix-sum-set 1 2 3 4))) "algorithm works for base case (4 samples)"))
+             (is (= (-> (+ 2 3) (/ 4/2)) (iqm-csr-tree (prefix-sum-set 1 2 3 4))) "algorithm works for base case (4 samples)"))
            (deftest five-test
-             (is (= (-> (+ 3) (+ (-> (+ 2 4) (* 3/4))) (/ 5/2)) (iiqm (prefix-sum-set 1 2 3 4 5))) "works for base+1 case (5 samples)"))
+             (is (= (-> (+ 3) (+ (-> (+ 2 4) (* 3/4))) (/ 5/2)) (iqm-csr-tree (prefix-sum-set 1 2 3 4 5))) "works for base+1 case (5 samples)"))
            (deftest nine-odds-test
              ;; from Wikipedia entry for IIQM: http://en.wikipedia.org/wiki/Interquartile_mean
-             (is (= 9 (iiqm (apply prefix-sum-set (filter odd? (range 1 18))))) "Wikipedia example works"))))
+             (is (= 9 (iqm-csr-tree (apply prefix-sum-set (filter odd? (range 1 18))))) "Wikipedia example works"))))
