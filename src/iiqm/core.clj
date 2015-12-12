@@ -250,6 +250,7 @@
   (cons [iiqm x] (IIQM1. (into (empty sorted-vector) (sort (conj sorted-vector x)))))
   IQM
   (iqm [iiqm] (iqm-sorted-vector-reduce sorted-vector)))
+(def iiqm1 (IIQM1. []))
 
 (defn binary-search
   "Given a sorted vector, returns the an index at which to insert x to maintain sort order.
@@ -285,6 +286,7 @@
   (cons [iiqm x] (IIQM2. (insert-sorted sorted-vector x)))
   IQM
   (iqm [iiqm] (iqm-sorted-vector-reduce sorted-vector)))
+(def iiqm2 (IIQM2. []))
 
 ;; IIQM3 will be an incremental algorithm based on the sorted array (like IIQM1-2)
 ;; but it will avoid calling the O(n) reduce in prefix sum.
@@ -295,6 +297,7 @@
   (cons [iiqm x] (IIQM4. (conj-ordered csr-tree x)))
   IQM
   (iqm [iiqm] (iqm-csr-tree csr-tree)))
+(def iiqm4 (IIQM4. csr-tree))
 
 (defmacro time-nano
   "Evaluates expr and returns an array. First is the value of the expr, second is the time it took in nanos."
@@ -312,10 +315,10 @@
            iqm (when (> n 3) (iqm new-algo))]
           (recur (inc n) new-algo))))))
 
-
 (defn benchmark [algo] (map (fn [%] [% (second (run-iiqm % algo))]) [10 100 1000]))
-(defn scale [m] (map (fn [[n nanos]][n  (quot nanos 1000000)]) m))
 
+
+(defn scale [m] (map (fn [[n nanos]] [n (quot nanos 1000000)]) m))
 
 (measured ct)
 (measured st)
@@ -323,13 +326,11 @@
 (measured cst)
 (measured csrt)
 (measured csro)
-
 (double (iqm-csr-tree csro))
-
 (iqm (reduce conj (IIQM1. []) (filter odd? (range 1 18))))
 
 (iqm (reduce conj (IIQM1. []) (take 10 rando)))
 
-(benchmark (IIQM1. []))
-(benchmark (IIQM2. []))
-
+(benchmark iiqm1)
+(benchmark iiqm2)
+(benchmark iiqm4)
