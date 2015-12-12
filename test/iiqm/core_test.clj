@@ -1,5 +1,6 @@
 (ns iiqm.core-test
   (:require [clojure.test :refer :all]
+            [clojure.tools.macro :refer :all]
             [iiqm.core :refer :all]))
 
 (testing "weighting"
@@ -15,16 +16,14 @@
 ;; Test the various implementations of IIQM
 
 (defn iiqm-tests [algo]
-  (let [algo-type (.getSimpleName (type algo))
-        test-name (fn [n] (str n "-" algo-type))]
-    (testing (test-name "IIQM-implementation")
-      (testing (test-name 'four-test)
-        (is (= (-> (+ 2 3) (/ 4/2)) (iqm (conj algo 1 2 3 4))) "algorithm works for base case (4 samples)"))
-      (testing (test-name 'five-test)
-        (is (= (-> (+ 3) (+ (-> (+ 2 4) (* 3/4))) (/ 5/2)) (iqm (conj algo 1 2 3 4 5))) "works for base+1 case (5 samples)"))
-      (testing (test-name 'nine-odds-test)
-        ;; from Wikipedia entry for IIQM: http://en.wikipedia.org/wiki/Interquartile_mean
-        (is (= 9 (iqm (apply conj algo (filter odd? (range 1 18))))) "Wikipedia example works")))))
+  (testing "IIQM"
+    (testing "four test"
+      (is (= (-> (+ 2 3) (/ 4/2)) (iqm (conj algo 1 2 3 4))) "algorithm works for base case (4 samples)"))
+    (testing "five test"
+      (is (= (-> (+ 3) (+ (-> (+ 2 4) (* 3/4))) (/ 5/2)) (iqm (conj algo 1 2 3 4 5))) "works for base+1 case (5 samples)"))
+    (testing "nine odds test"
+      ;; from Wikipedia entry for IIQM: http://en.wikipedia.org/wiki/Interquartile_mean
+      (is (= 9 (iqm (apply conj algo (filter odd? (range 1 18))))) "Wikipedia example works"))))
 
 (deftest iiqm1-tests (iiqm-tests iiqm1))
 (deftest iiqm2-tests (iiqm-tests iiqm2))
