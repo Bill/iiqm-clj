@@ -1,9 +1,8 @@
 (ns iiqm.core
-  (:require [clojure.data.finger-tree :refer (finger-tree meter measured split-tree ft-concat ft-split-at conjl)])
-  (:require [iiqm.recess
-             :refer [PrefixSum InterquartileMean weight prefix-sum interquartile-mean empty-recess-tree]
+  (:require [clojure.data.finger-tree :refer (finger-tree meter measured split-tree ft-concat ft-split-at conjl)]
+            [iiqm.recess
+             :refer [PrefixSum InterquartileMean prefix-sum interquartile-mean empty-recess-tree]
              :as recess])
-  (:import [iiqm.recess RecessTree])
   (:gen-class))
 ;(:require [spyscope.core])
 ;(:import [iiqm.recess RecessTree PrefixSum InterquartileMean])
