@@ -86,14 +86,14 @@
     (let [n (count this)                                    ;; total sample size
           w (weight n)                                      ;; weight for edge samples
           q2 (quot n 4)                                     ;; index of second quartile
-          q3 (- n 1 q2)                                     ;; index of third quartile
+          q4 (- n 1 q2)                                     ;; index of end of fourth quartile
           denominator (/ n 2)]                              ;; samples in IQR
       (if (< n 4)
         (throw (Exception. "Interquartile mean requires at least 4 data points."))
-        (/ (+ (* w (+ (nth this q2) (nth this q3)))
+        (/ (+ (* w (+ (nth this q2) (nth this q4)))
               (if (< n 5)
                 0
-                (- (prefix-sum this (dec q3)) (prefix-sum this q2))))
+                (- (prefix-sum this (dec q4)) (prefix-sum this q2))))
            denominator)))))
 
 ;; The count is an int. Sum and right are Objects so they can accept whatever kind of math-doing object you like.

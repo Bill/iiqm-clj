@@ -14,16 +14,16 @@
 
 (defn iqm-sorted-vector-reduce [coll]
   (let [n (count coll)                                    ;; total sample size
-        w (recess/weight n)                                      ;; weight for edge samples
+        w (recess/weight n)                               ;; weight for edge samples
         q2 (quot n 4)                                     ;; index of second quartile
-        q3 (- n 1 q2)                                     ;; index of third quartile
+        q4 (- n 1 q2)                                     ;; index of end of fourth quartile
         denominator (/ n 2)]                              ;; samples in range
     (if (< n 4)
       (throw (Exception. "IIQM requires at least 4 data points."))
-      (/ (+ (* w (+ (nth coll q2) (nth coll q3)))
+      (/ (+ (* w (+ (nth coll q2) (nth coll q4)))
             (if (< n 5)
               0
-              (- (prefix-sum coll (dec q3)) (prefix-sum coll q2))))
+              (- (prefix-sum coll (dec q4)) (prefix-sum coll q2))))
          denominator))))
 
 ;; IIQM1 behaves kind of like a collection in that conj returns a new instance of IIQM1
@@ -74,6 +74,25 @@
 
 ;; IIQM3 will be an incremental algorithm based on the sorted array (like IIQM1-2)
 ;; but it will avoid calling the O(n) reduce in prefix sum.
+(defn iqm-sorted-vector-incremental [coll old_low_bound old_high_bound old_low_value old_high_value old_sum]
+  (let [n (count coll)                                    ;; total sample size
+        w (recess/weight n)                               ;; weight for edge samples
+        q2 (quot n 4)                                     ;; index of second quartile
+        q4 (- n 1 q2)                                     ;; index of end of fourth quartile
+        denominator (/ n 2)]                              ;; samples in range
+    (if (< n 4)
+      (throw (Exception. "IIQM requires at least 4 data points."))
+      (/ (+ (* w (+ (nth coll q2) (nth coll q4)))
+            (if (< n 5)
+              0
+              (- (prefix-sum coll (dec q4)) (prefix-sum coll q2))))
+         denominator))))
+
+(deftype IIQM3 [sorted-vector]
+  clojure.lang.IPersistentCollection
+  (cons [_ x] (IIQM3. (insert-sorted sorted-vector x)))
+  InterquartileMean
+  (interquartile-mean [_] (iqm-sorted-vector-reduce sorted-vector)))
 
 ;; construct with a csr-tree
 (def iiqm4 empty-recess-tree)
@@ -96,8 +115,8 @@
 
 (defn benchmark [algo] (map (fn [%] [% (second (run-iiqm % algo))]) [10 100 1000]))
 
+(defn scale [m] (map (fn [[n nanos]] [n (quot nanos 1000000)]) m))
+
 (benchmark iiqm1)
 (benchmark iiqm2)
 (benchmark iiqm4)
-
-(defn scale [m] (map (fn [[n nanos]] [n (quot nanos 1000000)]) m))
