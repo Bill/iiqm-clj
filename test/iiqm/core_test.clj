@@ -18,12 +18,12 @@
 (defn iiqm-tests [algo]
   (testing "IIQM"
     (testing "four test"
-      (is (= (-> (+ 2 3) (/ 4/2)) (recess/interquartile-mean (conj algo 1 2 3 4))) "algorithm works for base case (4 samples)"))
+         (is (= (-> (+ 2 3) (/ 4/2)) (recess/interquartile-mean (conj algo 1 2 3 4))) "algorithm works for base case (4 samples)"))
     (testing "five test"
-      (is (= (-> (+ 3) (+ (-> (+ 2 4) (* 3/4))) (/ 5/2)) (recess/interquartile-mean (conj algo 1 2 3 4 5))) "works for base+1 case (5 samples)"))
+         (is (= (-> (+ 3) (+ (-> (+ 2 4) (* 3/4))) (/ 5/2)) (recess/interquartile-mean (conj algo 1 2 3 4 5))) "works for base+1 case (5 samples)"))
     (testing "nine odds test"
-      ;; from Wikipedia entry for IIQM: http://en.wikipedia.org/wiki/Interquartile_mean
-      (is (= 9 (recess/interquartile-mean (apply conj algo (filter odd? (range 1 18))))) "Wikipedia example works"))))
+         ;; from Wikipedia entry for IIQM: http://en.wikipedia.org/wiki/Interquartile_mean
+         (is (= 9 (recess/interquartile-mean (apply conj algo (filter odd? (range 1 18))))) "Wikipedia example works"))))
 
 (deftest iiqm1-tests (iiqm-tests core/iiqm1))
 (deftest iiqm2-tests (iiqm-tests core/iiqm2))

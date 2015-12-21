@@ -2,9 +2,9 @@
   (:require [clojure.data.finger-tree :refer (finger-tree meter measured split-tree ft-concat ft-split-at conjl)]
             [iiqm.recess
              :refer [PrefixSum InterquartileMean prefix-sum interquartile-mean empty-recess-tree]
-             :as recess])
+             :as recess]
+            [spyscope.core])
   (:gen-class))
-;(:require [spyscope.core])
 ;(:import [iiqm.recess RecessTree PrefixSum InterquartileMean])
 
 (extend-type clojure.lang.IPersistentVector
@@ -70,47 +70,57 @@
   (interquartile-mean [_] (iqm-sorted-vector-reduce sorted-vector)))
 (def iiqm2 (IIQM2. []))
 
+(defn edge-factor [n]
+  (let [q (/ n 4)
+        low-bound (dec (int (Math/ceil q)))
+        high-bound (int (* 3 q))                            ; floor
+        width (inc (- high-bound low-bound))]
+    (printf "q: %f, low-bound: %d, high-bound: %d, width: %d" (double q) low-bound high-bound width)
+    (- q (dec (/ width 2)))))
+
 ;; IIQM3 will be an incremental algorithm based on the sorted array (like IIQM1-2)
 ;; but it will avoid calling the O(n) reduce in prefix sum.
-(defn iqm-sorted-vector-incremental [coll x old-q2 old-q4 old-low-value old-high-value old-sum]
+(defn iqm-sorted-vector-incremental [coll x old-low-bound old-high-bound old-low-value old-high-value old-sum]
   (let [n (count coll)]               ;; samples in range
     (case (compare n 4)
-      (-1 [0 0 0 0 0 0])
-      (0 (let [low-val (nth coll 1)
-               high-val(nth coll 2)
-               sum (+ low-val high-val)]
-           [(/ sum 2) 1 3 low-val high-val sum]))
-      (1 (let [w (recess/weight n)    ;; weight for edge samples
-               denominator (/ n 2)    ;; samples in range
-               q2 (quot n 4)          ;; index of second quartile
-               q4 (- n 1 q2)          ;; index of end of fourth quartile (one beyond range)
-               low-val (nth coll q2)                        ;; lowest value in range
-               high-val (nth coll (dec q4))                 ;; highest value in range
-               deltas
-               [(if (< x old-high-value)
-                  [(* -1 old-high-value)
-                   (if (>= x old-low-value)
-                     x
-                     old-low-value)]
-                  0)
-                (if (> q2 old-q2)
-                  (* -1 low-val)
-                  0)
-                (if (> q4 old-q4)
-                  high-val
-                  0)]
-               sum (reduce + old-sum (flatten deltas))
-               iqm (/ (+ sum (* w (+ low-val high-val)))
-                      denominator)]
-           [iqm q2 q4 low-val high-val sum])))))
+      -1 [0 0 0 0 0 0]
+      0 (let [a (nth coll 1)
+              b (nth coll 2)
+              sum (+ a b)]
+          [(/ sum 2) 0 3 a b sum])
+      1 (let [q           (/ n 4)
+              low-bound   (dec (int (Math/ceil q)))
+              high-bound  (int (* 3 q))                     ; floor
+              width       (inc (- high-bound low-bound))    ; actual samples in range
+              weight      (- q (dec (/ width 2)))           ; weight for edge samples
+              denominator (/ n 2)                           ; fraction of samples in range
+              low-val     (nth coll low-bound)              ; lowest value in range
+              high-val    (nth coll high-bound)             ; highest value in range
+              deltas
+              [(if (< x old-high-value)
+                 [(* -1 old-high-value)
+                  (if (>= x old-low-value)
+                    x
+                    old-low-value)]
+                 0)
+               (if (> low-bound old-low-bound)
+                 (* -1 low-val)
+                 0)
+               (if (> high-bound old-high-bound)
+                 (nth coll (dec high-bound))
+                 0)]
+              sum (reduce + old-sum (flatten deltas))
+              iqm (/ (+ sum (* weight (+ low-val high-val)))
+                     denominator)]
+            [iqm low-bound high-bound low-val high-val sum]))))
 
-(deftype IIQM3 [sorted-vector iqm q2 q4 low-value high-value sum]
+(deftype IIQM3 [sorted-vector iqm low-bound high-bound low-value high-value sum]
   clojure.lang.IPersistentCollection
   (cons [_ x] (let [new-sorted-vector
                     (insert-sorted sorted-vector x)
-                    [iqm new-q2 new-q4 new-low-value new-high-value new-sum]
-                    (iqm-sorted-vector-incremental new-sorted-vector x q2 q4 low-value high-value sum)]
-                (IIQM3. new-sorted-vector iqm new-q2 new-q4 new-low-value new-high-value new-sum)))
+                    [iqm new-low-bound new-high-bound new-low-value new-high-value new-sum]
+                    (iqm-sorted-vector-incremental new-sorted-vector x low-bound high-bound low-value high-value sum)]
+                (IIQM3. new-sorted-vector iqm new-low-bound new-high-bound new-low-value new-high-value new-sum)))
   InterquartileMean
   (interquartile-mean [_]
     (let [n (count sorted-vector)]

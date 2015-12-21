@@ -99,14 +99,14 @@
     (let [n (count this)                                    ;; total sample size
           w (weight n)                                      ;; weight for edge samples
           q2 (quot n 4)                                     ;; index of second quartile
-          q3 (- n 1 q2)                                     ;; index of third quartile
+          q4 (- n 1 q2)                                     ;; index of end of fourth quartile
           denominator (/ n 2)]                              ;; samples in IQR
       (if (< n 4)
         (throw (Exception. "Interquartile mean requires at least 4 data points."))
-        (/ (+ (* w (+ (nth this q2) (nth this q3)))
+        (/ (+ (* w (+ (nth this q2) (nth this q4)))
               (if (< n 5)
                 0
-                (- (prefix-sum this (dec q3)) (prefix-sum this q2))))
+                (- (prefix-sum this (dec q4)) (prefix-sum this q2))))
            denominator)))))
 
 ;; The count is an int. Sum and right are Objects so they can accept whatever kind of math-doing object you like.
@@ -135,9 +135,8 @@
             [iiqm.recess
              :refer [PrefixSum InterquartileMean prefix-sum interquartile-mean empty-recess-tree]
              :as recess]
-            [gorilla-plot.core :as plot])
+            [spyscope.core])
   (:gen-class))
-;(:require [spyscope.core])
 ;(:import [iiqm.recess RecessTree PrefixSum InterquartileMean])
 
 (extend-type clojure.lang.IPersistentVector
@@ -147,16 +146,16 @@
 
 (defn iqm-sorted-vector-reduce [coll]
   (let [n (count coll)                                    ;; total sample size
-        w (recess/weight n)                                      ;; weight for edge samples
+        w (recess/weight n)                               ;; weight for edge samples
         q2 (quot n 4)                                     ;; index of second quartile
-        q3 (- n 1 q2)                                     ;; index of third quartile
+        q4 (- n 1 q2)                                     ;; index of end of fourth quartile
         denominator (/ n 2)]                              ;; samples in range
     (if (< n 4)
       (throw (Exception. "IIQM requires at least 4 data points."))
-      (/ (+ (* w (+ (nth coll q2) (nth coll q3)))
+      (/ (+ (* w (+ (nth coll q2) (nth coll q4)))
             (if (< n 5)
               0
-              (- (prefix-sum coll (dec q3)) (prefix-sum coll q2))))
+              (- (prefix-sum coll (dec q4)) (prefix-sum coll q2))))
          denominator))))
 
 ;; IIQM1 behaves kind of like a collection in that conj returns a new instance of IIQM1
@@ -191,9 +190,7 @@
   (into (conj (subvec coll 0 i) x) (nthrest coll i)))
 
 (defn insert-sorted [coll x]
-  "Given a sorted collection coll and a new element x, return a new sorted collection with x in the right place.
-  NB: when it doesn't find x, it returns the index at which to insert x, so if you want to know if the value is
-  already in the collection, you'll have to look it up."
+  "Given a sorted collection coll and a new element x, return a new sorted collection with x in the right place."
   (let [i (binary-search coll x)]
     (insert coll i x)))
 
@@ -205,8 +202,65 @@
   (interquartile-mean [_] (iqm-sorted-vector-reduce sorted-vector)))
 (def iiqm2 (IIQM2. []))
 
+(defn edge-factor [n]
+  (let [q (/ n 4)
+        low-bound (dec (int (Math/ceil q)))
+        high-bound (int (* 3 q))                            ; floor
+        width (inc (- high-bound low-bound))]
+    (printf "q: %f, low-bound: %d, high-bound: %d, width: %d" (double q) low-bound high-bound width)
+    (- q (dec (/ width 2)))))
+
 ;; IIQM3 will be an incremental algorithm based on the sorted array (like IIQM1-2)
 ;; but it will avoid calling the O(n) reduce in prefix sum.
+(defn iqm-sorted-vector-incremental [coll x old-low-bound old-high-bound old-low-value old-high-value old-sum]
+  (let [n (count coll)]               ;; samples in range
+    (case (compare n 4)
+      -1 [0 0 0 0 0 0]
+      0 (let [a (nth coll 1)
+              b (nth coll 2)
+              sum (+ a b)]
+          [(/ sum 2) 0 3 a b sum])
+      1 (let [q           (/ n 4)
+              low-bound   (dec (int (Math/ceil q)))
+              high-bound  (int (* 3 q))                     ; floor
+              width       (inc (- high-bound low-bound))    ; actual samples in range
+              weight      (- q (dec (/ width 2)))           ; weight for edge samples
+              denominator (/ n 2)                           ; fraction of samples in range
+              low-val     (nth coll low-bound)              ; lowest value in range
+              high-val    (nth coll high-bound)             ; highest value in range
+              deltas
+              [(if (< x old-high-value)
+                 [(* -1 old-high-value)
+                  (if (>= x old-low-value)
+                    x
+                    old-low-value)]
+                 0)
+               (if (> low-bound old-low-bound)
+                 (* -1 low-val)
+                 0)
+               (if (> high-bound old-high-bound)
+                 (nth coll (dec high-bound))
+                 0)]
+              sum (reduce + old-sum (flatten deltas))
+              iqm (/ (+ sum (* weight (+ low-val high-val)))
+                     denominator)]
+            [iqm low-bound high-bound low-val high-val sum]))))
+
+(deftype IIQM3 [sorted-vector iqm low-bound high-bound low-value high-value sum]
+  clojure.lang.IPersistentCollection
+  (cons [_ x] (let [new-sorted-vector
+                    (insert-sorted sorted-vector x)
+                    [iqm new-low-bound new-high-bound new-low-value new-high-value new-sum]
+                    (iqm-sorted-vector-incremental new-sorted-vector x low-bound high-bound low-value high-value sum)]
+                (IIQM3. new-sorted-vector iqm new-low-bound new-high-bound new-low-value new-high-value new-sum)))
+  InterquartileMean
+  (interquartile-mean [_]
+    (let [n (count sorted-vector)]
+      (if (> n 3)
+        iqm
+        (throw (Exception. (format "can't compute interquartile mean on %d samples (need at least 4)" n)))))))
+
+(def iiqm3 (IIQM3. [] 0 0 0 0 0 0))
 
 ;; construct with a csr-tree
 (def iiqm4 empty-recess-tree)
@@ -227,7 +281,7 @@
            iqm (when (> n 3) (interquartile-mean new-algo))]
           (recur (inc n) new-algo))))))
 
-(defn benchmark [algo] (map (fn [%] [% (second (run-iiqm % algo))]) [10 100 1000 3000 5000 7000 10000 20000]))
+(defn benchmark [algo] (map (fn [%] [% (second (run-iiqm % algo))]) [10 100 1000]))
 
 (defn scale [m] (map (fn [[n nanos]] [n (quot nanos 1000000)]) m))
 
@@ -237,13 +291,26 @@
 ;; <=
 
 ;; @@
+(ns iiqm.core
+  (:require [gorilla-plot.core :as plot]))
+
+(defn benchmark [algo] (map (fn [%] [% (second (run-iiqm % algo))]) [10 100 1000 7000 20000]))
+
+
+;; @@
+;; =>
+;;; {"type":"html","content":"<span class='clj-var'>#&#x27;iiqm.core/benchmark</span>","value":"#'iiqm.core/benchmark"}
+;; <=
+
+;; @@
 (plot/compose
-  (plot/list-plot (scale (benchmark iiqm1)) :color "blue" :joined true )
+  (plot/list-plot (scale (benchmark iiqm1)) :color "blue" :joined true)
   (plot/list-plot (scale (benchmark iiqm2)) :color "red" :joined true)
+  (plot/list-plot (scale (benchmark iiqm3)) :color "cyan" :joined true)
   (plot/list-plot (scale (benchmark iiqm4)) :color "green" :joined true))
 ;; @@
 ;; =>
-;;; {"type":"vega","content":{"width":400,"height":247.2187957763672,"padding":{"top":10,"left":50,"bottom":20,"right":10},"scales":[{"name":"x","type":"linear","range":"width","zero":false,"domain":{"data":"f50c2741-0b9b-47ce-a7be-3fe543cae11b","field":"data.x"}},{"name":"y","type":"linear","range":"height","nice":true,"zero":false,"domain":{"data":"f50c2741-0b9b-47ce-a7be-3fe543cae11b","field":"data.y"}}],"axes":[{"type":"x","scale":"x"},{"type":"y","scale":"y"}],"data":[{"name":"f50c2741-0b9b-47ce-a7be-3fe543cae11b","values":[{"x":10,"y":3},{"x":100,"y":8},{"x":1000,"y":578},{"x":3000,"y":2544},{"x":5000,"y":8396},{"x":7000,"y":16071},{"x":10000,"y":33342},{"x":20000,"y":114199}]},{"name":"e71e6aef-9608-4043-9d92-b6d7e5a33cd0","values":[{"x":10,"y":6},{"x":100,"y":7},{"x":1000,"y":525},{"x":3000,"y":3370},{"x":5000,"y":10543},{"x":7000,"y":19020},{"x":10000,"y":41220},{"x":20000,"y":159471}]},{"name":"ba8a12cd-e974-4adc-ac8f-c279c7fd989a","values":[{"x":10,"y":7},{"x":100,"y":26},{"x":1000,"y":516},{"x":3000,"y":1078},{"x":5000,"y":1625},{"x":7000,"y":1997},{"x":10000,"y":3494},{"x":20000,"y":7113}]}],"marks":[{"type":"line","from":{"data":"f50c2741-0b9b-47ce-a7be-3fe543cae11b"},"properties":{"enter":{"x":{"scale":"x","field":"data.x"},"y":{"scale":"y","field":"data.y"},"stroke":{"value":"blue"},"strokeWidth":{"value":2},"strokeOpacity":{"value":1}}}},{"type":"line","from":{"data":"e71e6aef-9608-4043-9d92-b6d7e5a33cd0"},"properties":{"enter":{"x":{"scale":"x","field":"data.x"},"y":{"scale":"y","field":"data.y"},"stroke":{"value":"red"},"strokeWidth":{"value":2},"strokeOpacity":{"value":1}}}},{"type":"line","from":{"data":"ba8a12cd-e974-4adc-ac8f-c279c7fd989a"},"properties":{"enter":{"x":{"scale":"x","field":"data.x"},"y":{"scale":"y","field":"data.y"},"stroke":{"value":"green"},"strokeWidth":{"value":2},"strokeOpacity":{"value":1}}}}]},"value":"#gorilla_repl.vega.VegaView{:content {:width 400, :height 247.2188, :padding {:top 10, :left 50, :bottom 20, :right 10}, :scales [{:name \"x\", :type \"linear\", :range \"width\", :zero false, :domain {:data \"f50c2741-0b9b-47ce-a7be-3fe543cae11b\", :field \"data.x\"}} {:name \"y\", :type \"linear\", :range \"height\", :nice true, :zero false, :domain {:data \"f50c2741-0b9b-47ce-a7be-3fe543cae11b\", :field \"data.y\"}}], :axes [{:type \"x\", :scale \"x\"} {:type \"y\", :scale \"y\"}], :data ({:name \"f50c2741-0b9b-47ce-a7be-3fe543cae11b\", :values ({:x 10, :y 3} {:x 100, :y 8} {:x 1000, :y 578} {:x 3000, :y 2544} {:x 5000, :y 8396} {:x 7000, :y 16071} {:x 10000, :y 33342} {:x 20000, :y 114199})} {:name \"e71e6aef-9608-4043-9d92-b6d7e5a33cd0\", :values ({:x 10, :y 6} {:x 100, :y 7} {:x 1000, :y 525} {:x 3000, :y 3370} {:x 5000, :y 10543} {:x 7000, :y 19020} {:x 10000, :y 41220} {:x 20000, :y 159471})} {:name \"ba8a12cd-e974-4adc-ac8f-c279c7fd989a\", :values ({:x 10, :y 7} {:x 100, :y 26} {:x 1000, :y 516} {:x 3000, :y 1078} {:x 5000, :y 1625} {:x 7000, :y 1997} {:x 10000, :y 3494} {:x 20000, :y 7113})}), :marks ({:type \"line\", :from {:data \"f50c2741-0b9b-47ce-a7be-3fe543cae11b\"}, :properties {:enter {:x {:scale \"x\", :field \"data.x\"}, :y {:scale \"y\", :field \"data.y\"}, :stroke {:value \"blue\"}, :strokeWidth {:value 2}, :strokeOpacity {:value 1}}}} {:type \"line\", :from {:data \"e71e6aef-9608-4043-9d92-b6d7e5a33cd0\"}, :properties {:enter {:x {:scale \"x\", :field \"data.x\"}, :y {:scale \"y\", :field \"data.y\"}, :stroke {:value \"red\"}, :strokeWidth {:value 2}, :strokeOpacity {:value 1}}}} {:type \"line\", :from {:data \"ba8a12cd-e974-4adc-ac8f-c279c7fd989a\"}, :properties {:enter {:x {:scale \"x\", :field \"data.x\"}, :y {:scale \"y\", :field \"data.y\"}, :stroke {:value \"green\"}, :strokeWidth {:value 2}, :strokeOpacity {:value 1}}}})}}"}
+;;; {"type":"vega","content":{"width":400,"height":247.2187957763672,"padding":{"top":10,"left":50,"bottom":20,"right":10},"scales":[{"name":"x","type":"linear","range":"width","zero":false,"domain":{"data":"e2acd31a-e22f-4a2b-88bc-c7596cedcba3","field":"data.x"}},{"name":"y","type":"linear","range":"height","nice":true,"zero":false,"domain":{"data":"e2acd31a-e22f-4a2b-88bc-c7596cedcba3","field":"data.y"}}],"axes":[{"type":"x","scale":"x"},{"type":"y","scale":"y"}],"data":[{"name":"e2acd31a-e22f-4a2b-88bc-c7596cedcba3","values":[{"x":10,"y":0},{"x":100,"y":14},{"x":1000,"y":650},{"x":7000,"y":15083},{"x":20000,"y":101205}]},{"name":"4031a863-57a8-4adf-887b-6e23b2ce3761","values":[{"x":10,"y":0},{"x":100,"y":6},{"x":1000,"y":503},{"x":7000,"y":19982},{"x":20000,"y":167797}]},{"name":"1d400bf5-feba-4ed3-a6dc-445ad588cf2e","values":[{"x":10,"y":1},{"x":100,"y":4},{"x":1000,"y":159},{"x":7000,"y":11097},{"x":20000,"y":81569}]},{"name":"16b25f5a-1f94-49a0-b2cf-d62427000e78","values":[{"x":10,"y":1},{"x":100,"y":12},{"x":1000,"y":190},{"x":7000,"y":1887},{"x":20000,"y":6619}]}],"marks":[{"type":"line","from":{"data":"e2acd31a-e22f-4a2b-88bc-c7596cedcba3"},"properties":{"enter":{"x":{"scale":"x","field":"data.x"},"y":{"scale":"y","field":"data.y"},"stroke":{"value":"blue"},"strokeWidth":{"value":2},"strokeOpacity":{"value":1}}}},{"type":"line","from":{"data":"4031a863-57a8-4adf-887b-6e23b2ce3761"},"properties":{"enter":{"x":{"scale":"x","field":"data.x"},"y":{"scale":"y","field":"data.y"},"stroke":{"value":"red"},"strokeWidth":{"value":2},"strokeOpacity":{"value":1}}}},{"type":"line","from":{"data":"1d400bf5-feba-4ed3-a6dc-445ad588cf2e"},"properties":{"enter":{"x":{"scale":"x","field":"data.x"},"y":{"scale":"y","field":"data.y"},"stroke":{"value":"cyan"},"strokeWidth":{"value":2},"strokeOpacity":{"value":1}}}},{"type":"line","from":{"data":"16b25f5a-1f94-49a0-b2cf-d62427000e78"},"properties":{"enter":{"x":{"scale":"x","field":"data.x"},"y":{"scale":"y","field":"data.y"},"stroke":{"value":"green"},"strokeWidth":{"value":2},"strokeOpacity":{"value":1}}}}]},"value":"#gorilla_repl.vega.VegaView{:content {:width 400, :height 247.2188, :padding {:top 10, :left 50, :bottom 20, :right 10}, :scales [{:name \"x\", :type \"linear\", :range \"width\", :zero false, :domain {:data \"e2acd31a-e22f-4a2b-88bc-c7596cedcba3\", :field \"data.x\"}} {:name \"y\", :type \"linear\", :range \"height\", :nice true, :zero false, :domain {:data \"e2acd31a-e22f-4a2b-88bc-c7596cedcba3\", :field \"data.y\"}}], :axes [{:type \"x\", :scale \"x\"} {:type \"y\", :scale \"y\"}], :data ({:name \"e2acd31a-e22f-4a2b-88bc-c7596cedcba3\", :values ({:x 10, :y 0} {:x 100, :y 14} {:x 1000, :y 650} {:x 7000, :y 15083} {:x 20000, :y 101205})} {:name \"4031a863-57a8-4adf-887b-6e23b2ce3761\", :values ({:x 10, :y 0} {:x 100, :y 6} {:x 1000, :y 503} {:x 7000, :y 19982} {:x 20000, :y 167797})} {:name \"1d400bf5-feba-4ed3-a6dc-445ad588cf2e\", :values ({:x 10, :y 1} {:x 100, :y 4} {:x 1000, :y 159} {:x 7000, :y 11097} {:x 20000, :y 81569})} {:name \"16b25f5a-1f94-49a0-b2cf-d62427000e78\", :values ({:x 10, :y 1} {:x 100, :y 12} {:x 1000, :y 190} {:x 7000, :y 1887} {:x 20000, :y 6619})}), :marks ({:type \"line\", :from {:data \"e2acd31a-e22f-4a2b-88bc-c7596cedcba3\"}, :properties {:enter {:x {:scale \"x\", :field \"data.x\"}, :y {:scale \"y\", :field \"data.y\"}, :stroke {:value \"blue\"}, :strokeWidth {:value 2}, :strokeOpacity {:value 1}}}} {:type \"line\", :from {:data \"4031a863-57a8-4adf-887b-6e23b2ce3761\"}, :properties {:enter {:x {:scale \"x\", :field \"data.x\"}, :y {:scale \"y\", :field \"data.y\"}, :stroke {:value \"red\"}, :strokeWidth {:value 2}, :strokeOpacity {:value 1}}}} {:type \"line\", :from {:data \"1d400bf5-feba-4ed3-a6dc-445ad588cf2e\"}, :properties {:enter {:x {:scale \"x\", :field \"data.x\"}, :y {:scale \"y\", :field \"data.y\"}, :stroke {:value \"cyan\"}, :strokeWidth {:value 2}, :strokeOpacity {:value 1}}}} {:type \"line\", :from {:data \"16b25f5a-1f94-49a0-b2cf-d62427000e78\"}, :properties {:enter {:x {:scale \"x\", :field \"data.x\"}, :y {:scale \"y\", :field \"data.y\"}, :stroke {:value \"green\"}, :strokeWidth {:value 2}, :strokeOpacity {:value 1}}}})}}"}
 ;; <=
 
 ;; @@
