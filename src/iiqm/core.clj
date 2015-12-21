@@ -58,9 +58,7 @@
   (into (conj (subvec coll 0 i) x) (nthrest coll i)))
 
 (defn insert-sorted [coll x]
-  "Given a sorted collection coll and a new element x, return a new sorted collection with x in the right place.
-  NB: when it doesn't find x, it returns the index at which to insert x, so if you want to know if the value is
-  already in the collection, you'll have to look it up."
+  "Given a sorted collection coll and a new element x, return a new sorted collection with x in the right place."
   (let [i (binary-search coll x)]
     (insert coll i x)))
 
@@ -74,25 +72,53 @@
 
 ;; IIQM3 will be an incremental algorithm based on the sorted array (like IIQM1-2)
 ;; but it will avoid calling the O(n) reduce in prefix sum.
-(defn iqm-sorted-vector-incremental [coll old_low_bound old_high_bound old_low_value old_high_value old_sum]
-  (let [n (count coll)                                    ;; total sample size
-        w (recess/weight n)                               ;; weight for edge samples
-        q2 (quot n 4)                                     ;; index of second quartile
-        q4 (- n 1 q2)                                     ;; index of end of fourth quartile
-        denominator (/ n 2)]                              ;; samples in range
-    (if (< n 4)
-      (throw (Exception. "IIQM requires at least 4 data points."))
-      (/ (+ (* w (+ (nth coll q2) (nth coll q4)))
-            (if (< n 5)
-              0
-              (- (prefix-sum coll (dec q4)) (prefix-sum coll q2))))
-         denominator))))
+(defn iqm-sorted-vector-incremental [coll x old-q2 old-q4 old-low-value old-high-value old-sum]
+  (let [n (count coll)]               ;; samples in range
+    (case (compare n 4)
+      (-1 [0 0 0 0 0 0])
+      (0 (let [low-val (nth coll 1)
+               high-val(nth coll 2)
+               sum (+ low-val high-val)]
+           [(/ sum 2) 1 3 low-val high-val sum]))
+      (1 (let [w (recess/weight n)    ;; weight for edge samples
+               denominator (/ n 2)    ;; samples in range
+               q2 (quot n 4)          ;; index of second quartile
+               q4 (- n 1 q2)          ;; index of end of fourth quartile (one beyond range)
+               low-val (nth coll q2)                        ;; lowest value in range
+               high-val (nth coll (dec q4))                 ;; highest value in range
+               deltas
+               [(if (< x old-high-value)
+                  [(* -1 old-high-value)
+                   (if (>= x old-low-value)
+                     x
+                     old-low-value)]
+                  0)
+                (if (> q2 old-q2)
+                  (* -1 low-val)
+                  0)
+                (if (> q4 old-q4)
+                  high-val
+                  0)]
+               sum (reduce + old-sum (flatten deltas))
+               iqm (/ (+ sum (* w (+ low-val high-val)))
+                      denominator)]
+           [iqm q2 q4 low-val high-val sum])))))
 
-(deftype IIQM3 [sorted-vector]
+(deftype IIQM3 [sorted-vector iqm q2 q4 low-value high-value sum]
   clojure.lang.IPersistentCollection
-  (cons [_ x] (IIQM3. (insert-sorted sorted-vector x)))
+  (cons [_ x] (let [new-sorted-vector
+                    (insert-sorted sorted-vector x)
+                    [iqm new-q2 new-q4 new-low-value new-high-value new-sum]
+                    (iqm-sorted-vector-incremental new-sorted-vector x q2 q4 low-value high-value sum)]
+                (IIQM3. new-sorted-vector iqm new-q2 new-q4 new-low-value new-high-value new-sum)))
   InterquartileMean
-  (interquartile-mean [_] (iqm-sorted-vector-reduce sorted-vector)))
+  (interquartile-mean [_]
+    (let [n (count sorted-vector)]
+      (if (> n 3)
+        iqm
+        (throw (Exception. (format "can't compute interquartile mean on %d samples (need at least 4)" n)))))))
+
+(def iiqm3 (IIQM3. [] 0 0 0 0 0 0))
 
 ;; construct with a csr-tree
 (def iiqm4 empty-recess-tree)
@@ -119,4 +145,5 @@
 
 (benchmark iiqm1)
 (benchmark iiqm2)
+(benchmark iiqm3)
 (benchmark iiqm4)

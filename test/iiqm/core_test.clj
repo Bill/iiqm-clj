@@ -27,6 +27,7 @@
 
 (deftest iiqm1-tests (iiqm-tests core/iiqm1))
 (deftest iiqm2-tests (iiqm-tests core/iiqm2))
+(deftest iiqm3-tests (iiqm-tests core/iiqm3))
 (deftest iiqm4-tests (iiqm-tests core/iiqm4))
 
 
