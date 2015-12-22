@@ -39,7 +39,7 @@
 (defn binary-search
   "Given a sorted vector, returns the an index at which to insert x to maintain sort order.
   NB: if x is not already in the collection, an index where x belongs is returned. If you need to
-  know if x is already present or not, then use nth to look it up."
+  know if x is already present or not, then use nth and that return value to look it up."
   ([sorted-vec value] (binary-search sorted-vec value 0 (dec (count sorted-vec))))
   ([sorted-vec value low high]
    (if (> low high)
@@ -55,7 +55,7 @@
 (defn insert [coll i x]
   "Insert x in vector at index i and move the rest of the elements down to make room. Returned vector is 1
   element larger."
-  (into (conj (subvec coll 0 i) x) (nthrest coll i)))
+  (into (conj (subvec coll 0 i) x) (subvec coll i (count coll))))
 
 (defn insert-sorted [coll x]
   "Given a sorted collection coll and a new element x, return a new sorted collection with x in the right place."
